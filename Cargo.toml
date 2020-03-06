@@ -1,0 +1,22 @@
+[package]
+name = "tower-http-codec"
+version = "0.0.0"
+authors = ["Daiki Mizukami <tesaguriguma@gmail.com>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+async-compression = { version = "0.3", features = ["gzip", "stream"] }
+bytes = "0.5"
+futures-core = "0.3"
+http = "0.2"
+http-body = "0.3"
+pin-project = "0.4"
+tower-layer = "0.3"
+tower-service = "0.3"
+
+[dev-dependencies]
+futures = "0.3"
+hyper = "0.13"
+tokio = { version = "0.2", features = ["macros"] }
+tower = "0.3"

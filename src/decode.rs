@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use async_compression::stream::GzipDecoder;
 use bytes::{Buf, Bytes};
 use futures_core::stream::Stream;
-use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING};
+use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING};
 use pin_project::{pin_project, project};
 
 use crate::util::BodyAsStream;
@@ -99,11 +99,13 @@ where
         let this = self.as_mut().project();
         this.inner.poll(cx).map_err(Into::into).map(|result| {
             result.and_then(|res| {
-                let (parts, body) = res.into_parts();
-                let inner = match parts.headers.get(CONTENT_ENCODING).map(|v| v.as_bytes()) {
-                    None => BodyInner::Identity(body),
-                    Some(b"gzip") => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
-                    Some(_) => return Err("unsupported encoding".into()),
+                let (mut parts, body) = res.into_parts();
+                let inner = match parts.headers.entry(CONTENT_ENCODING) {
+                    header::Entry::Occupied(e) if e.get() == "gzip" => {
+                        e.remove();
+                        BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body)))
+                    }
+                    _ => BodyInner::Identity(body),
                 };
                 let body = DecodeBody { inner };
                 Ok(http::Response::from_parts(parts, body))

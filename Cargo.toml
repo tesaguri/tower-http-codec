@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-async-compression = { version = "0.3", features = ["gzip", "stream"] }
+async-compression = { version = "0.3", features = ["brotli", "gzip", "stream", "zlib"] }
 bytes = "0.5"
 futures-core = "0.3"
 http = "0.2"

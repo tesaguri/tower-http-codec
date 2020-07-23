@@ -3,11 +3,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use async_compression::stream::GzipDecoder;
+use async_compression::stream::{BrotliDecoder, GzipDecoder, ZlibDecoder};
 use bytes::{Buf, Bytes};
 use futures_core::stream::Stream;
 use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING};
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use crate::util::BodyAsStream;
 
@@ -35,11 +35,13 @@ pub struct DecodeBody<B> {
     inner: BodyInner<B>,
 }
 
-#[pin_project]
+#[pin_project(project = BodyInnerProj)]
 #[derive(Debug)]
 enum BodyInner<B> {
     Identity(#[pin] B),
     Gzip(#[pin] GzipDecoder<BodyAsStream<B>>),
+    Deflate(#[pin] ZlibDecoder<BodyAsStream<B>>),
+    Brotli(#[pin] BrotliDecoder<BodyAsStream<B>>),
 }
 
 impl<S> DecodeService<S> {
@@ -65,7 +67,7 @@ where
 
     fn call(&mut self, mut req: http::Request<T>) -> Self::Future {
         req.headers_mut()
-            .insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+            .insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip,deflate,br"));
         ResponseFuture {
             inner: self.inner.call(req),
         }
@@ -97,20 +99,40 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
-        this.inner.poll(cx).map_err(Into::into).map(|result| {
-            result.and_then(|res| {
-                let (mut parts, body) = res.into_parts();
-                let inner = match parts.headers.entry(CONTENT_ENCODING) {
-                    header::Entry::Occupied(e) if e.get() == "gzip" => {
-                        e.remove();
-                        BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body)))
-                    }
-                    _ => BodyInner::Identity(body),
-                };
-                let body = DecodeBody { inner };
-                Ok(http::Response::from_parts(parts, body))
-            })
-        })
+        this.inner
+            .poll(cx)
+            .map_err(Into::into)
+            .map(|result| result.map(DecodeBody::wrap_response))
+    }
+}
+
+impl<B> DecodeBody<B>
+where
+    B: http_body::Body,
+    B::Error: Into<Box<dyn Error + Send + Sync>>,
+{
+    fn wrap_response(res: http::Response<B>) -> http::Response<Self> {
+        let (mut parts, body) = res.into_parts();
+        let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
+            match e.get().as_bytes() {
+                b"gzip" => {
+                    e.remove();
+                    BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body)))
+                }
+                b"deflate" => {
+                    e.remove();
+                    BodyInner::Deflate(ZlibDecoder::new(BodyAsStream(body)))
+                }
+                b"br" => {
+                    e.remove();
+                    BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body)))
+                }
+                _ => BodyInner::Identity(body),
+            }
+        } else {
+            BodyInner::Identity(body)
+        };
+        http::Response::from_parts(parts, DecodeBody { inner })
     }
 }
 
@@ -123,36 +145,33 @@ where
     type Data = Bytes;
     type Error = Box<dyn Error + Send + Sync>;
 
-    #[project]
     fn poll_data(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
-        #[project]
         match self.project().inner.project() {
-            BodyInner::Identity(b) => b.poll_data(cx).map(|opt| {
-                opt.map(|result| result.map(|mut data| data.to_bytes()).map_err(Into::into))
-            }),
-            BodyInner::Gzip(s) => s
-                .poll_next(cx)
-                .map(|opt| opt.map(|result| result.map_err(Into::into))),
+            BodyInnerProj::Identity(b) => {
+                return b.poll_data(cx).map(|opt| {
+                    opt.map(|result| result.map(|mut data| data.to_bytes()).map_err(Into::into))
+                })
+            }
+            BodyInnerProj::Gzip(s) => s.poll_next(cx),
+            BodyInnerProj::Deflate(s) => s.poll_next(cx),
+            BodyInnerProj::Brotli(s) => s.poll_next(cx),
         }
+        .map(|opt| opt.map(|result| result.map_err(Into::into)))
     }
 
-    #[project]
     fn poll_trailers(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Option<http::HeaderMap>, Self::Error>> {
-        #[project]
         match self.project().inner.project() {
-            BodyInner::Identity(b) => b.poll_trailers(cx).map_err(Into::into),
-            BodyInner::Gzip(s) => s
-                .get_pin_mut()
-                .project()
-                .0
-                .poll_trailers(cx)
-                .map_err(Into::into),
+            BodyInnerProj::Identity(b) => b.poll_trailers(cx),
+            BodyInnerProj::Gzip(s) => s.get_pin_mut().project().0.poll_trailers(cx),
+            BodyInnerProj::Deflate(s) => s.get_pin_mut().project().0.poll_trailers(cx),
+            BodyInnerProj::Brotli(s) => s.get_pin_mut().project().0.poll_trailers(cx),
         }
+        .map_err(Into::into)
     }
 }

@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-async-compression = { version = "0.3", features = ["brotli", "gzip", "stream", "zlib"] }
+async-compression = { version = "0.3", features = ["stream"] }
 bytes = "0.5"
 futures-core = "0.3"
 http = "0.2"
@@ -20,3 +20,8 @@ futures = "0.3"
 hyper = "0.13"
 tokio = { version = "0.2", features = ["macros"] }
 tower = "0.3"
+
+[features]
+br = ["async-compression/brotli"]
+deflate = ["async-compression/zlib"]
+gzip = ["async-compression/gzip"]

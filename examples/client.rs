@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+use std::env;
 use std::io::{stdout, Write};
 use std::pin::Pin;
 
@@ -9,13 +11,20 @@ use tower::{Service, ServiceBuilder};
 
 #[tokio::main]
 async fn main() {
+    let uri: Uri = env::args()
+        .skip(1)
+        .next()
+        .expect("missing URI argument")
+        .try_into()
+        .unwrap();
+
     let mut client = ServiceBuilder::new()
         .layer(tower_http_codec::DecodeLayer::new())
         .service(Client::new());
-    let req = Request::get(Uri::from_static("http://httpbin.org/gzip"))
-        .body(Body::empty())
-        .unwrap();
+
+    let req = Request::get(uri).body(Body::empty()).unwrap();
     let mut body = client.call(req).await.unwrap();
+
     let mut stdout = stdout();
     stream::poll_fn(|cx| Pin::new(&mut body).poll_data(cx))
         .try_for_each(|chunk| {

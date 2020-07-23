@@ -25,11 +25,12 @@ use crate::util::BodyAsStream;
 #[derive(Debug, Clone)]
 pub struct DecodeService<S> {
     inner: S,
+    options: Options,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct DecodeLayer {
-    _priv: (),
+    options: Options,
 }
 
 #[pin_project]
@@ -37,6 +38,7 @@ pub struct DecodeLayer {
 pub struct ResponseFuture<F> {
     #[pin]
     inner: F,
+    options: Options,
 }
 
 #[pin_project]
@@ -58,9 +60,40 @@ enum BodyInner<B> {
     Brotli(#[pin] BrotliDecoder<BodyAsStream<B>>),
 }
 
+#[derive(Debug, Clone)]
+struct Options {
+    #[cfg(feature = "gzip")]
+    gzip: bool,
+    #[cfg(feature = "deflate")]
+    deflate: bool,
+    #[cfg(feature = "br")]
+    br: bool,
+}
+
 impl<S> DecodeService<S> {
     pub fn new(service: S) -> Self {
-        DecodeService { inner: service }
+        DecodeService {
+            inner: service,
+            options: Options::default(),
+        }
+    }
+
+    #[cfg(feature = "gzip")]
+    pub fn gzip(mut self, enable: bool) -> Self {
+        self.options.gzip = enable;
+        self
+    }
+
+    #[cfg(feature = "deflate")]
+    pub fn deflate(mut self, enable: bool) -> Self {
+        self.options.deflate = enable;
+        self
+    }
+
+    #[cfg(feature = "br")]
+    pub fn br(mut self, enable: bool) -> Self {
+        self.options.br = enable;
+        self
     }
 }
 
@@ -80,26 +113,12 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<T>) -> Self::Future {
-        if cfg!(any(feature = "br", feature = "deflate", feature = "gzip")) {
-            let accept = match (
-                cfg!(feature = "gzip"),
-                cfg!(feature = "deflate"),
-                cfg!(feature = "br"),
-            ) {
-                (true, true, true) => "gzip,deflate,br",
-                (true, true, false) => "gzip,deflate",
-                (true, false, true) => "gzip,br",
-                (true, false, false) => "gzip",
-                (false, true, true) => "deflate,br",
-                (false, true, false) => "deflate",
-                (false, false, true) => "br",
-                (false, false, false) => unreachable!(),
-            };
-            req.headers_mut()
-                .insert(ACCEPT_ENCODING, HeaderValue::from_static(accept));
+        if let Some(accept) = self.options.accept_encoding() {
+            req.headers_mut().insert(ACCEPT_ENCODING, accept);
         }
         ResponseFuture {
             inner: self.inner.call(req),
+            options: self.options.clone(),
         }
     }
 }
@@ -108,13 +127,34 @@ impl DecodeLayer {
     pub fn new() -> Self {
         Default::default()
     }
+
+    #[cfg(feature = "gzip")]
+    pub fn gzip(mut self, enable: bool) -> Self {
+        self.options.gzip = enable;
+        self
+    }
+
+    #[cfg(feature = "deflate")]
+    pub fn deflate(mut self, enable: bool) -> Self {
+        self.options.deflate = enable;
+        self
+    }
+
+    #[cfg(feature = "br")]
+    pub fn br(mut self, enable: bool) -> Self {
+        self.options.br = enable;
+        self
+    }
 }
 
 impl<S> tower_layer::Layer<S> for DecodeLayer {
     type Service = DecodeService<S>;
 
     fn layer(&self, service: S) -> Self::Service {
-        DecodeService::new(service)
+        DecodeService {
+            inner: service,
+            options: self.options.clone(),
+        }
     }
 }
 
@@ -132,7 +172,7 @@ where
         this.inner
             .poll(cx)
             .map_err(Into::into)
-            .map(|result| result.map(DecodeBody::wrap_response))
+            .map(|result| result.map(|res| DecodeBody::wrap_response(res, &self.options)))
     }
 }
 
@@ -141,22 +181,22 @@ where
     B: http_body::Body,
     B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
-    fn wrap_response(res: http::Response<B>) -> http::Response<Self> {
+    fn wrap_response(res: http::Response<B>, options: &Options) -> http::Response<Self> {
         let (mut parts, body) = res.into_parts();
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
             match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
-                b"gzip" => {
+                b"gzip" if options.gzip => {
                     e.remove();
                     BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body)))
                 }
                 #[cfg(feature = "deflate")]
-                b"deflate" => {
+                b"deflate" if options.deflate => {
                     e.remove();
                     BodyInner::Deflate(ZlibDecoder::new(BodyAsStream(body)))
                 }
                 #[cfg(feature = "br")]
-                b"br" => {
+                b"br" if options.br => {
                     e.remove();
                     BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body)))
                 }
@@ -212,5 +252,67 @@ where
             BodyInnerProj::Brotli(s) => s.get_pin_mut().project().0.poll_trailers(cx),
         }
         .map_err(Into::into)
+    }
+}
+
+impl Options {
+    fn accept_encoding(&self) -> Option<HeaderValue> {
+        let accept = match (self.gzip(), self.deflate(), self.br()) {
+            (true, true, true) => "gzip,deflate,br",
+            (true, true, false) => "gzip,deflate",
+            (true, false, true) => "gzip,br",
+            (true, false, false) => "gzip",
+            (false, true, true) => "deflate,br",
+            (false, true, false) => "deflate",
+            (false, false, true) => "br",
+            (false, false, false) => return None,
+        };
+        Some(HeaderValue::from_static(accept))
+    }
+
+    fn gzip(&self) -> bool {
+        #[cfg(feature = "gzip")]
+        {
+            self.gzip
+        }
+        #[cfg(not(feature = "gzip"))]
+        {
+            false
+        }
+    }
+
+    fn deflate(&self) -> bool {
+        #[cfg(feature = "deflate")]
+        {
+            self.deflate
+        }
+        #[cfg(not(feature = "deflate"))]
+        {
+            false
+        }
+    }
+
+    fn br(&self) -> bool {
+        #[cfg(feature = "br")]
+        {
+            self.br
+        }
+        #[cfg(not(feature = "br"))]
+        {
+            false
+        }
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            #[cfg(feature = "gzip")]
+            gzip: true,
+            #[cfg(feature = "deflate")]
+            deflate: true,
+            #[cfg(feature = "br")]
+            br: true,
+        }
     }
 }

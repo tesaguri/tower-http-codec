@@ -16,7 +16,7 @@ use async_compression::stream::GzipDecoder;
 #[cfg(feature = "deflate")]
 use async_compression::stream::ZlibDecoder;
 use bytes::{Buf, Bytes};
-use futures_core::stream::Stream;
+use futures_core::{Stream, TryFuture};
 use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, RANGE};
 use pin_project::pin_project;
 
@@ -162,19 +162,19 @@ impl<S> tower_layer::Layer<S> for DecodeLayer {
     }
 }
 
-impl<F, B, E> Future for ResponseFuture<F>
+impl<F, B> Future for ResponseFuture<F>
 where
-    F: Future<Output = Result<http::Response<B>, E>>,
+    F: TryFuture<Ok = http::Response<B>>,
+    F::Error: Into<Box<dyn Error + Send + Sync>>,
     B: http_body::Body,
     B::Error: Into<Box<dyn Error + Send + Sync>>,
-    E: Into<Box<dyn Error + Send + Sync>>,
 {
     type Output = Result<http::Response<DecodeBody<B>>, Box<dyn Error + Send + Sync>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
         this.inner
-            .poll(cx)
+            .try_poll(cx)
             .map_err(Into::into)
             .map(|result| result.map(|res| DecodeBody::wrap_response(res, &self.options)))
     }
@@ -217,7 +217,6 @@ where
 impl<B> http_body::Body for DecodeBody<B>
 where
     B: http_body::Body,
-    B::Error: Into<Box<dyn Error + Send + Sync>>,
     B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
     type Data = Bytes;

@@ -17,7 +17,7 @@ use async_compression::stream::GzipDecoder;
 use async_compression::stream::ZlibDecoder;
 use bytes::{Buf, Bytes};
 use futures_core::stream::Stream;
-use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING};
+use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, RANGE};
 use pin_project::pin_project;
 
 use crate::util::BodyAsStream;
@@ -113,8 +113,12 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<T>) -> Self::Future {
-        if let Some(accept) = self.options.accept_encoding() {
-            req.headers_mut().insert(ACCEPT_ENCODING, accept);
+        if !req.headers().contains_key(RANGE) {
+            if let header::Entry::Vacant(e) = req.headers_mut().entry(ACCEPT_ENCODING) {
+                if let Some(accept) = self.options.accept_encoding() {
+                    e.insert(accept);
+                }
+            }
         }
         ResponseFuture {
             inner: self.inner.call(req),
@@ -186,26 +190,27 @@ where
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
             match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
-                b"gzip" if options.gzip => {
-                    e.remove();
-                    BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body)))
-                }
+                b"gzip" if options.gzip => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
                 #[cfg(feature = "deflate")]
                 b"deflate" if options.deflate => {
-                    e.remove();
                     BodyInner::Deflate(ZlibDecoder::new(BodyAsStream(body)))
                 }
                 #[cfg(feature = "br")]
-                b"br" if options.br => {
-                    e.remove();
-                    BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body)))
-                }
-                _ => BodyInner::Identity(body),
+                b"br" if options.br => BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body))),
+                _ => return http::Response::from_parts(parts, DecodeBody::identity(body)),
             }
+            e.remove();
+            parts.headers.remove(CONTENT_LENGTH);
         } else {
-            BodyInner::Identity(body)
+            return http::Response::from_parts(parts, DecodeBody::identity(body));
         };
         http::Response::from_parts(parts, DecodeBody { inner })
+    }
+
+    fn identity(body: B) -> Self {
+        DecodeBody {
+            inner: BodyInner::Identity(body),
+        }
     }
 }
 

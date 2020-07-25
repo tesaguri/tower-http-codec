@@ -15,6 +15,7 @@ use async_compression::stream::BrotliDecoder;
 use async_compression::stream::GzipDecoder;
 #[cfg(feature = "deflate")]
 use async_compression::stream::ZlibDecoder;
+use bitflags::bitflags;
 use bytes::{Buf, Bytes};
 use futures_core::{Stream, TryFuture};
 use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, RANGE};
@@ -60,14 +61,15 @@ enum BodyInner<B> {
     Brotli(#[pin] BrotliDecoder<BodyAsStream<B>>),
 }
 
-#[derive(Debug, Clone)]
-struct Options {
-    #[cfg(feature = "gzip")]
-    gzip: bool,
-    #[cfg(feature = "deflate")]
-    deflate: bool,
-    #[cfg(feature = "br")]
-    br: bool,
+bitflags! {
+    struct Options: u8 {
+        #[cfg(feature = "gzip")]
+        const GZIP = 0b001;
+        #[cfg(feature = "deflate")]
+        const DEFLATE = 0b010;
+        #[cfg(feature = "br")]
+        const BR = 0b100;
+    }
 }
 
 impl<S> DecodeService<S> {
@@ -80,19 +82,19 @@ impl<S> DecodeService<S> {
 
     #[cfg(feature = "gzip")]
     pub fn gzip(mut self, enable: bool) -> Self {
-        self.options.gzip = enable;
+        self.options.set(Options::GZIP, enable);
         self
     }
 
     #[cfg(feature = "deflate")]
     pub fn deflate(mut self, enable: bool) -> Self {
-        self.options.deflate = enable;
+        self.options.set(Options::DEFLATE, enable);
         self
     }
 
     #[cfg(feature = "br")]
     pub fn br(mut self, enable: bool) -> Self {
-        self.options.br = enable;
+        self.options.set(Options::BR, enable);
         self
     }
 }
@@ -134,19 +136,19 @@ impl DecodeLayer {
 
     #[cfg(feature = "gzip")]
     pub fn gzip(mut self, enable: bool) -> Self {
-        self.options.gzip = enable;
+        self.options.set(Options::GZIP, enable);
         self
     }
 
     #[cfg(feature = "deflate")]
     pub fn deflate(mut self, enable: bool) -> Self {
-        self.options.deflate = enable;
+        self.options.set(Options::DEFLATE, enable);
         self
     }
 
     #[cfg(feature = "br")]
     pub fn br(mut self, enable: bool) -> Self {
-        self.options.br = enable;
+        self.options.set(Options::BR, enable);
         self
     }
 }
@@ -190,13 +192,13 @@ where
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
             let inner = match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
-                b"gzip" if options.gzip => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
+                b"gzip" if options.gzip() => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
                 #[cfg(feature = "deflate")]
-                b"deflate" if options.deflate => {
+                b"deflate" if options.deflate() => {
                     BodyInner::Deflate(ZlibDecoder::new(BodyAsStream(body)))
                 }
                 #[cfg(feature = "br")]
-                b"br" if options.br => BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body))),
+                b"br" if options.br() => BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body))),
                 _ => return http::Response::from_parts(parts, DecodeBody::identity(body)),
             };
             e.remove();
@@ -278,7 +280,7 @@ impl Options {
     fn gzip(&self) -> bool {
         #[cfg(feature = "gzip")]
         {
-            self.gzip
+            self.contains(Options::GZIP)
         }
         #[cfg(not(feature = "gzip"))]
         {
@@ -289,7 +291,7 @@ impl Options {
     fn deflate(&self) -> bool {
         #[cfg(feature = "deflate")]
         {
-            self.deflate
+            self.contains(Options::DEFLATE)
         }
         #[cfg(not(feature = "deflate"))]
         {
@@ -300,7 +302,7 @@ impl Options {
     fn br(&self) -> bool {
         #[cfg(feature = "br")]
         {
-            self.br
+            self.contains(Options::BR)
         }
         #[cfg(not(feature = "br"))]
         {
@@ -311,13 +313,6 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options {
-            #[cfg(feature = "gzip")]
-            gzip: true,
-            #[cfg(feature = "deflate")]
-            deflate: true,
-            #[cfg(feature = "br")]
-            br: true,
-        }
+        Options::all()
     }
 }

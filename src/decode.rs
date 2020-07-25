@@ -188,7 +188,7 @@ where
     fn wrap_response(res: http::Response<B>, options: &Options) -> http::Response<Self> {
         let (mut parts, body) = res.into_parts();
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
-            match e.get().as_bytes() {
+            let inner = match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
                 b"gzip" if options.gzip => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
                 #[cfg(feature = "deflate")]
@@ -198,11 +198,12 @@ where
                 #[cfg(feature = "br")]
                 b"br" if options.br => BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body))),
                 _ => return http::Response::from_parts(parts, DecodeBody::identity(body)),
-            }
+            };
             e.remove();
             parts.headers.remove(CONTENT_LENGTH);
+            inner
         } else {
-            return http::Response::from_parts(parts, DecodeBody::identity(body));
+            BodyInner::Identity(body)
         };
         http::Response::from_parts(parts, DecodeBody { inner })
     }

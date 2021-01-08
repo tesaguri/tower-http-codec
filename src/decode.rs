@@ -124,7 +124,7 @@ where
         }
         ResponseFuture {
             inner: self.inner.call(req),
-            options: self.options.clone(),
+            options: self.options,
         }
     }
 }
@@ -159,7 +159,7 @@ impl<S> tower_layer::Layer<S> for DecodeLayer {
     fn layer(&self, service: S) -> Self::Service {
         DecodeService {
             inner: service,
-            options: self.options.clone(),
+            options: self.options,
         }
     }
 }

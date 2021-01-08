@@ -12,8 +12,7 @@ use tower::{Service, ServiceBuilder};
 #[tokio::main]
 async fn main() {
     let uri: Uri = env::args()
-        .skip(1)
-        .next()
+        .nth(1)
         .expect("missing URI argument")
         .try_into()
         .unwrap();
@@ -28,7 +27,7 @@ async fn main() {
     let mut stdout = stdout();
     stream::poll_fn(|cx| Pin::new(&mut body).poll_data(cx))
         .try_for_each(|chunk| {
-            stdout.write(&chunk).unwrap();
+            stdout.write_all(&chunk).unwrap();
             async { Ok(()) }
         })
         .await

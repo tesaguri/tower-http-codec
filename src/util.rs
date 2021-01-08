@@ -25,7 +25,7 @@ where
         self.project().body.poll_data(cx).map(|opt| {
             opt.map(|result| {
                 result
-                    .map(|mut data| data.to_bytes())
+                    .map(|mut data| data.copy_to_bytes(data.remaining()))
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
             })
         })

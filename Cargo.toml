@@ -7,21 +7,22 @@ publish = false
 
 [dependencies]
 bitflags = "1"
-bytes = "0.5"
+bytes = "1"
 futures-core = "0.3"
 http = "0.2"
-http-body = "0.3"
+http-body = "0.4"
 pin-project-lite = "0.2"
+tokio-util = { version = "0.6.1", features = ["codec", "io"] }
 tower-layer = "0.3"
 tower-service = "0.3"
 
-async-compression = { version = "0.3", features = ["stream"], optional = true }
+async-compression = { version = "0.3", features = ["tokio"], optional = true }
 
 [dev-dependencies]
 futures = "0.3"
-hyper = "0.13"
-tokio = { version = "0.2", features = ["macros"] }
-tower = "0.3"
+hyper = { version = "0.14", features = ["client", "http1", "runtime"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = "0.4"
 
 [features]
 br = ["async-compression/brotli"]

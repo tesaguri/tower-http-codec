@@ -19,7 +19,7 @@ use bitflags::bitflags;
 use bytes::{Buf, Bytes};
 use futures_core::{Stream, TryFuture};
 use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, RANGE};
-use pin_project::pin_project;
+use pin_project_lite::pin_project;
 
 use crate::util::BodyAsStream;
 
@@ -34,31 +34,47 @@ pub struct DecodeLayer {
     options: Options,
 }
 
-#[pin_project]
-#[derive(Debug)]
-pub struct ResponseFuture<F> {
-    #[pin]
-    inner: F,
-    options: Options,
+pin_project! {
+    #[derive(Debug)]
+    pub struct ResponseFuture<F> {
+        #[pin]
+        inner: F,
+        options: Options,
+    }
 }
 
-#[pin_project]
-#[derive(Debug)]
-pub struct DecodeBody<B> {
-    #[pin]
-    inner: BodyInner<B>,
+pin_project! {
+    #[derive(Debug)]
+    pub struct DecodeBody<B> {
+        #[pin]
+        inner: BodyInner<B>,
+    }
 }
 
-#[pin_project(project = BodyInnerProj)]
-#[derive(Debug)]
-enum BodyInner<B> {
-    Identity(#[pin] B),
-    #[cfg(feature = "gzip")]
-    Gzip(#[pin] GzipDecoder<BodyAsStream<B>>),
-    #[cfg(feature = "deflate")]
-    Deflate(#[pin] ZlibDecoder<BodyAsStream<B>>),
-    #[cfg(feature = "br")]
-    Brotli(#[pin] BrotliDecoder<BodyAsStream<B>>),
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        #[cfg(feature = "gzip")]
+        Gzip {
+            #[pin]
+            inner: GzipDecoder<BodyAsStream<B>>,
+        },
+        #[cfg(feature = "deflate")]
+        Deflate {
+            #[pin]
+            inner: ZlibDecoder<BodyAsStream<B>>,
+        },
+        #[cfg(feature = "br")]
+        Brotli {
+            #[pin]
+            inner: BrotliDecoder<BodyAsStream<B>>,
+        },
+    }
 }
 
 bitflags! {
@@ -192,27 +208,31 @@ where
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
             let inner = match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
-                b"gzip" if options.gzip() => BodyInner::Gzip(GzipDecoder::new(BodyAsStream(body))),
+                b"gzip" if options.gzip() => BodyInner::Gzip {
+                    inner: GzipDecoder::new(BodyAsStream { body }),
+                },
                 #[cfg(feature = "deflate")]
-                b"deflate" if options.deflate() => {
-                    BodyInner::Deflate(ZlibDecoder::new(BodyAsStream(body)))
-                }
+                b"deflate" if options.deflate() => BodyInner::Deflate {
+                    inner: ZlibDecoder::new(BodyAsStream { body }),
+                },
                 #[cfg(feature = "br")]
-                b"br" if options.br() => BodyInner::Brotli(BrotliDecoder::new(BodyAsStream(body))),
+                b"br" if options.br() => BodyInner::Brotli {
+                    inner: BrotliDecoder::new(BodyAsStream { body }),
+                },
                 _ => return http::Response::from_parts(parts, DecodeBody::identity(body)),
             };
             e.remove();
             parts.headers.remove(CONTENT_LENGTH);
             inner
         } else {
-            BodyInner::Identity(body)
+            BodyInner::Identity { inner: body }
         };
         http::Response::from_parts(parts, DecodeBody { inner })
     }
 
     fn identity(body: B) -> Self {
         DecodeBody {
-            inner: BodyInner::Identity(body),
+            inner: BodyInner::Identity { inner: body },
         }
     }
 }
@@ -230,17 +250,17 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
         let poll: Poll<Option<Result<_, _>>> = match self.project().inner.project() {
-            BodyInnerProj::Identity(b) => {
-                return b.poll_data(cx).map(|opt| {
+            BodyInnerProj::Identity { inner } => {
+                return inner.poll_data(cx).map(|opt| {
                     opt.map(|result| result.map(|mut data| data.to_bytes()).map_err(Into::into))
                 })
             }
             #[cfg(feature = "gzip")]
-            BodyInnerProj::Gzip(s) => s.poll_next(cx),
+            BodyInnerProj::Gzip { inner } => inner.poll_next(cx),
             #[cfg(feature = "deflate")]
-            BodyInnerProj::Deflate(s) => s.poll_next(cx),
+            BodyInnerProj::Deflate { inner } => inner.poll_next(cx),
             #[cfg(feature = "br")]
-            BodyInnerProj::Brotli(s) => s.poll_next(cx),
+            BodyInnerProj::Brotli { inner } => inner.poll_next(cx),
         };
         poll.map(|opt| opt.map(|result| result.map_err(io::Error::into)))
     }
@@ -250,13 +270,15 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Option<http::HeaderMap>, Self::Error>> {
         match self.project().inner.project() {
-            BodyInnerProj::Identity(b) => b.poll_trailers(cx),
+            BodyInnerProj::Identity { inner } => inner.poll_trailers(cx),
             #[cfg(feature = "gzip")]
-            BodyInnerProj::Gzip(s) => s.get_pin_mut().project().0.poll_trailers(cx),
+            BodyInnerProj::Gzip { inner } => inner.get_pin_mut().project().body.poll_trailers(cx),
             #[cfg(feature = "deflate")]
-            BodyInnerProj::Deflate(s) => s.get_pin_mut().project().0.poll_trailers(cx),
+            BodyInnerProj::Deflate { inner } => {
+                inner.get_pin_mut().project().body.poll_trailers(cx)
+            }
             #[cfg(feature = "br")]
-            BodyInnerProj::Brotli(s) => s.get_pin_mut().project().0.poll_trailers(cx),
+            BodyInnerProj::Brotli { inner } => inner.get_pin_mut().project().body.poll_trailers(cx),
         }
         .map_err(Into::into)
     }

@@ -6,9 +6,13 @@ use std::task::{Context, Poll};
 use bytes::{Buf, Bytes};
 use futures_core::Stream;
 
-#[pin_project::pin_project]
-#[derive(Debug)]
-pub struct BodyAsStream<B>(#[pin] pub B);
+pin_project_lite::pin_project! {
+    #[derive(Debug)]
+    pub struct BodyAsStream<B> {
+        #[pin]
+        pub body: B,
+    }
+}
 
 impl<B> Stream for BodyAsStream<B>
 where
@@ -18,7 +22,7 @@ where
     type Item = io::Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().0.poll_data(cx).map(|opt| {
+        self.project().body.poll_data(cx).map(|opt| {
             opt.map(|result| {
                 result
                     .map(|mut data| data.to_bytes())

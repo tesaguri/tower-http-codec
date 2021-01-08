@@ -12,7 +12,7 @@ bytes = "0.5"
 futures-core = "0.3"
 http = "0.2"
 http-body = "0.3"
-pin-project = "0.4"
+pin-project-lite = "0.2"
 tower-layer = "0.3"
 tower-service = "0.3"
 

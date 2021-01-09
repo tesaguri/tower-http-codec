@@ -51,6 +51,9 @@ pin_project! {
     }
 }
 
+// XXX: `pin-project-lite` does not propagate variant attribute (`cfg`) to the project type,
+// so we have to write the definitions for every possible combination of the crate features.
+#[cfg(all(feature = "gzip", feature = "deflate", feature = "br"))]
 pin_project! {
     #[project = BodyInnerProj]
     #[derive(Debug)]
@@ -59,20 +62,137 @@ pin_project! {
             #[pin]
             inner: B,
         },
-        #[cfg(feature = "gzip")]
         Gzip {
             #[pin]
             inner: GzipDecoder<BodyAsStream<B>>,
         },
-        #[cfg(feature = "deflate")]
         Deflate {
             #[pin]
             inner: ZlibDecoder<BodyAsStream<B>>,
         },
-        #[cfg(feature = "br")]
         Brotli {
             #[pin]
             inner: BrotliDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(feature = "gzip", feature = "deflate", not(feature = "br")))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Gzip {
+            #[pin]
+            inner: GzipDecoder<BodyAsStream<B>>,
+        },
+        Deflate {
+            #[pin]
+            inner: ZlibDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(feature = "gzip", not(feature = "deflate"), feature = "br"))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Gzip {
+            #[pin]
+            inner: GzipDecoder<BodyAsStream<B>>,
+        },
+        Brotli {
+            #[pin]
+            inner: BrotliDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(feature = "gzip", not(feature = "deflate"), not(feature = "br")))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Gzip {
+            #[pin]
+            inner: GzipDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(not(feature = "gzip"), feature = "deflate", feature = "br"))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Deflate {
+            #[pin]
+            inner: ZlibDecoder<BodyAsStream<B>>,
+        },
+        Brotli {
+            #[pin]
+            inner: BrotliDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(not(feature = "gzip"), feature = "deflate", not(feature = "br")))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Deflate {
+            #[pin]
+            inner: ZlibDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(not(feature = "gzip"), not(feature = "deflate"), feature = "br"))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
+        },
+        Brotli {
+            #[pin]
+            inner: BrotliDecoder<BodyAsStream<B>>,
+        },
+    }
+}
+
+#[cfg(all(not(feature = "gzip"), not(feature = "deflate"), not(feature = "br")))]
+pin_project! {
+    #[project = BodyInnerProj]
+    #[derive(Debug)]
+    enum BodyInner<B> {
+        Identity {
+            #[pin]
+            inner: B,
         },
     }
 }

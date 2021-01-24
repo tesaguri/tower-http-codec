@@ -3,7 +3,7 @@
     allow(unreachable_code, unused)
 )]
 
-use std::error::Error;
+use std::fmt::{self, Debug, Formatter};
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -17,13 +17,13 @@ use async_compression::tokio::bufread::GzipDecoder;
 use async_compression::tokio::bufread::ZlibDecoder;
 use bitflags::bitflags;
 use bytes::{Buf, Bytes, BytesMut};
-use futures_core::{Stream, TryFuture};
+use futures_core::{ready, Stream, TryFuture};
 use http::header::{self, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, RANGE};
 use pin_project_lite::pin_project;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::io::StreamReader;
 
-use crate::util::BodyAsStream;
+use crate::Error;
 
 #[derive(Debug, Clone)]
 pub struct DecodeService<S> {
@@ -47,7 +47,7 @@ pin_project! {
 
 pin_project! {
     #[derive(Debug)]
-    pub struct DecodeBody<B> {
+    pub struct DecodeBody<B: http_body::Body> {
         #[pin]
         inner: BodyInner<B>,
     }
@@ -57,14 +57,14 @@ pin_project! {
 macro_rules! pin_project_cfg {
     (
         $(#[$($attr:tt)*])*
-        enum $name:ident $(<$($generics:ident),*$(,)?>)? {
+        enum $name:ident $(<$($typaram:ident $(: $bound:path)?),*$(,)?>)? {
             $($body:tt)*
         }
     ) => {
         pin_project_cfg! {
             @accum
             #[cfg(all())]
-            [$(#[$($attr)*])* enum $name <$($($generics),*)?>]
+            [$(#[$($attr)*])* enum $name <$($($typaram $(: $bound)?),*)?>]
             {}
             $($body)*
         }
@@ -127,12 +127,12 @@ macro_rules! pin_project_cfg {
     };
 }
 
-type BodyReader<B> = StreamReader<BodyAsStream<B>, Bytes>;
+type BodyReader<B> = StreamReader<Adapter<B>, Bytes>;
 
 pin_project_cfg! {
     #[project = BodyInnerProj]
     #[derive(Debug)]
-    enum BodyInner<B> {
+    enum BodyInner<B: http_body::Body> {
         Identity {
             #[pin]
             inner: B,
@@ -152,6 +152,18 @@ pin_project_cfg! {
             #[pin]
             inner: FramedRead<BrotliDecoder<BodyReader<B>>, BytesCodec>,
         },
+    }
+}
+
+pin_project! {
+    /// A `TryStream<Error>` that captures the errors from the `Body` for later inspection.
+    ///
+    /// This is needed since the `io::Read` wrappers do not provide direct access to
+    /// the inner `Body::Error` values.
+    struct Adapter<B: http_body::Body> {
+        #[pin]
+        body: B,
+        error: Option<B::Error>,
     }
 }
 
@@ -196,16 +208,14 @@ impl<S> DecodeService<S> {
 impl<S, T, B> tower_service::Service<http::Request<T>> for DecodeService<S>
 where
     S: tower_service::Service<http::Request<T>, Response = http::Response<B>>,
-    S::Error: Into<Box<dyn Error + Send + Sync>>,
     B: http_body::Body,
-    B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
     type Response = http::Response<DecodeBody<B>>;
-    type Error = Box<dyn Error + Send + Sync>;
+    type Error = S::Error;
     type Future = ResponseFuture<S::Future>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Into::into)
+        self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, mut req: http::Request<T>) -> Self::Future {
@@ -261,17 +271,14 @@ impl<S> tower_layer::Layer<S> for DecodeLayer {
 impl<F, B> Future for ResponseFuture<F>
 where
     F: TryFuture<Ok = http::Response<B>>,
-    F::Error: Into<Box<dyn Error + Send + Sync>>,
     B: http_body::Body,
-    B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
-    type Output = Result<http::Response<DecodeBody<B>>, Box<dyn Error + Send + Sync>>;
+    type Output = Result<http::Response<DecodeBody<B>>, F::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
         this.inner
             .try_poll(cx)
-            .map_err(Into::into)
             .map(|result| result.map(|res| DecodeBody::wrap_response(res, &self.options)))
     }
 }
@@ -279,33 +286,29 @@ where
 impl<B> DecodeBody<B>
 where
     B: http_body::Body,
-    B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
     fn wrap_response(res: http::Response<B>, options: &Options) -> http::Response<Self> {
         let (mut parts, body) = res.into_parts();
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {
             let inner = match e.get().as_bytes() {
                 #[cfg(feature = "gzip")]
-                b"gzip" if options.gzip() => BodyInner::Gzip {
-                    inner: FramedRead::new(
-                        GzipDecoder::new(StreamReader::new(BodyAsStream { body })),
-                        BytesCodec::new(),
-                    ),
-                },
+                b"gzip" if options.gzip() => {
+                    let read = StreamReader::new(Adapter { body, error: None });
+                    let inner = FramedRead::new(GzipDecoder::new(read), BytesCodec::new());
+                    BodyInner::Gzip { inner }
+                }
                 #[cfg(feature = "deflate")]
-                b"deflate" if options.deflate() => BodyInner::Deflate {
-                    inner: FramedRead::new(
-                        ZlibDecoder::new(StreamReader::new(BodyAsStream { body })),
-                        BytesCodec::new(),
-                    ),
-                },
+                b"deflate" if options.deflate() => {
+                    let read = StreamReader::new(Adapter { body, error: None });
+                    let inner = FramedRead::new(ZlibDecoder::new(read), BytesCodec::new());
+                    BodyInner::Deflate { inner }
+                }
                 #[cfg(feature = "br")]
-                b"br" if options.br() => BodyInner::Brotli {
-                    inner: FramedRead::new(
-                        BrotliDecoder::new(StreamReader::new(BodyAsStream { body })),
-                        BytesCodec::new(),
-                    ),
-                },
+                b"br" if options.br() => {
+                    let read = StreamReader::new(Adapter { body, error: None });
+                    let inner = FramedRead::new(BrotliDecoder::new(read), BytesCodec::new());
+                    BodyInner::Brotli { inner }
+                }
                 _ => return http::Response::from_parts(parts, DecodeBody::identity(body)),
             };
             e.remove();
@@ -327,33 +330,53 @@ where
 impl<B> http_body::Body for DecodeBody<B>
 where
     B: http_body::Body,
-    B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
     type Data = Bytes;
-    type Error = Box<dyn Error + Send + Sync>;
+    type Error = Error<B::Error>;
 
     fn poll_data(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
-        let poll: Poll<Option<Result<_, _>>> = match self.project().inner.project() {
+        // The type annotation is required when compiling with no features.
+        let (poll, inner): (Poll<_>, Pin<&mut Adapter<B>>) = match self.project().inner.project() {
             BodyInnerProj::Identity { inner } => {
                 return inner.poll_data(cx).map(|opt| {
                     opt.map(|result| {
                         result
                             .map(|mut data| data.copy_to_bytes(data.remaining()))
-                            .map_err(Into::into)
+                            .map_err(Error::Body)
                     })
                 })
             }
             #[cfg(feature = "gzip")]
-            BodyInnerProj::Gzip { inner } => inner.poll_next(cx),
+            BodyInnerProj::Gzip { mut inner } => (
+                inner.as_mut().poll_next(cx),
+                inner.get_pin_mut().get_pin_mut().get_pin_mut(),
+            ),
             #[cfg(feature = "deflate")]
-            BodyInnerProj::Deflate { inner } => inner.poll_next(cx),
+            BodyInnerProj::Deflate { mut inner } => (
+                inner.as_mut().poll_next(cx),
+                inner.get_pin_mut().get_pin_mut().get_pin_mut(),
+            ),
             #[cfg(feature = "br")]
-            BodyInnerProj::Brotli { inner } => inner.poll_next(cx),
+            BodyInnerProj::Brotli { mut inner } => (
+                inner.as_mut().poll_next(cx),
+                inner.get_pin_mut().get_pin_mut().get_pin_mut(),
+            ),
         };
-        poll.map(|opt| opt.map(|result| result.map(BytesMut::freeze).map_err(io::Error::into)))
+        poll.map(|opt: Option<_>| {
+            opt.map(|result: Result<_, _>| {
+                result.map(BytesMut::freeze).map_err(|e| {
+                    inner
+                        .project()
+                        .error
+                        .take()
+                        .map(Error::Body)
+                        .unwrap_or(Error::Compression(e))
+                })
+            })
+        })
     }
 
     fn poll_trailers(
@@ -387,7 +410,46 @@ where
                 .body
                 .poll_trailers(cx),
         }
-        .map_err(Into::into)
+        .map_err(Error::Body)
+    }
+}
+
+impl<B: http_body::Body + Debug> Debug for Adapter<B> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        #[derive(Debug)]
+        struct Adapter<B> {
+            body: B,
+            error: Option<Placeholder>,
+        }
+        struct Placeholder;
+        impl Debug for Placeholder {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                f.write_str("_")
+            }
+        }
+
+        Adapter {
+            body: &self.body,
+            error: self.error.as_ref().and(Some(Placeholder)),
+        }
+        .fmt(f)
+    }
+}
+
+impl<B: http_body::Body> Stream for Adapter<B> {
+    type Item = io::Result<Bytes>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match ready!(this.body.poll_data(cx)) {
+            Some(Ok(mut data)) => Poll::Ready(Some(Ok(data.copy_to_bytes(data.remaining())))),
+            Some(Err(e)) => {
+                *this.error = Some(e);
+                // Return a placeholder, which should be discarded by the outer `DecodeBody`.
+                Poll::Ready(Some(Err(io::Error::from_raw_os_error(0))))
+            }
+            None => Poll::Ready(None),
+        }
     }
 }
 

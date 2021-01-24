@@ -127,6 +127,8 @@ macro_rules! pin_project_cfg {
     };
 }
 
+type BodyReader<B> = StreamReader<BodyAsStream<B>, Bytes>;
+
 pin_project_cfg! {
     #[project = BodyInnerProj]
     #[derive(Debug)]
@@ -138,17 +140,17 @@ pin_project_cfg! {
         #[cfg(feature = "gzip")]
         Gzip {
             #[pin]
-            inner: FramedRead<GzipDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
+            inner: FramedRead<GzipDecoder<BodyReader<B>>, BytesCodec>,
         },
         #[cfg(feature = "deflate")]
         Deflate {
             #[pin]
-            inner: FramedRead<ZlibDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
+            inner: FramedRead<ZlibDecoder<BodyReader<B>>, BytesCodec>,
         },
         #[cfg(feature = "br")]
         Brotli {
             #[pin]
-            inner: FramedRead<BrotliDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
+            inner: FramedRead<BrotliDecoder<BodyReader<B>>, BytesCodec>,
         },
     }
 }

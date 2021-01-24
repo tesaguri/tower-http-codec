@@ -53,10 +53,81 @@ pin_project! {
     }
 }
 
-// XXX: `pin-project-lite` does not propagate variant attribute (`cfg`) to the project type,
-// so we have to write the definitions for every possible combination of the crate features.
-#[cfg(all(feature = "gzip", feature = "deflate", feature = "br"))]
-pin_project! {
+/// A wrapper around `pin_project!` to handle `cfg` attributes on enum variants.
+macro_rules! pin_project_cfg {
+    (
+        $(#[$($attr:tt)*])*
+        enum $name:ident $(<$($generics:ident),*$(,)?>)? {
+            $($body:tt)*
+        }
+    ) => {
+        pin_project_cfg! {
+            @accum
+            #[cfg(all())]
+            [$(#[$($attr)*])* enum $name <$($($generics),*)?>]
+            {}
+            $($body)*
+        }
+    };
+    (
+        @accum
+        #[cfg(all($($pred_accum:tt)*))]
+        $outer:tt
+        {$($accum:tt)*}
+
+        #[cfg($($pred:tt)*)]
+        $(#[$($variant_attr:tt)*])* $variant:ident $variant_body:tt,
+        $($rest:tt)*
+    ) => {
+        pin_project_cfg! {
+            @accum
+            #[cfg(all($($pred_accum)* $($pred)*,))]
+            $outer
+            { $($accum)* $(#[$($variant_attr)*])* $variant $variant_body, }
+            $($rest)*
+        }
+        pin_project_cfg! {
+            @accum
+            #[cfg(all($($pred_accum)* not($($pred)*),))]
+            $outer
+            {$($accum)*}
+            $($rest)*
+        }
+    };
+    (
+        @accum
+        #[cfg(all($($pred_accum:tt)*))]
+        $outer:tt
+        {$($accum:tt)*}
+
+        $(#[$($variant_attr:tt)*])* $variant:ident $variant_body:tt,
+        $($rest:tt)*
+    ) => {
+        pin_project_cfg! {
+            @accum
+            #[cfg(all($($pred_accum)*))]
+            $outer
+            {
+                $($accum)*
+                $(#[$($variant_attr)*])* $variant $variant_body,
+            }
+            $($rest)*
+        }
+    };
+    (
+        @accum
+        #[$cfg:meta]
+        [$($outer:tt)*]
+        $body:tt
+    ) => {
+        #[$cfg]
+        pin_project! {
+            $($outer)* $body
+        }
+    };
+}
+
+pin_project_cfg! {
     #[project = BodyInnerProj]
     #[derive(Debug)]
     enum BodyInner<B> {
@@ -64,137 +135,20 @@ pin_project! {
             #[pin]
             inner: B,
         },
+        #[cfg(feature = "gzip")]
         Gzip {
             #[pin]
             inner: FramedRead<GzipDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
         },
+        #[cfg(feature = "deflate")]
         Deflate {
             #[pin]
             inner: FramedRead<ZlibDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
         },
+        #[cfg(feature = "br")]
         Brotli {
             #[pin]
             inner: FramedRead<BrotliDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(feature = "gzip", feature = "deflate", not(feature = "br")))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Gzip {
-            #[pin]
-            inner: FramedRead<GzipDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-        Deflate {
-            #[pin]
-            inner: FramedRead<ZlibDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(feature = "gzip", not(feature = "deflate"), feature = "br"))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Gzip {
-            #[pin]
-            inner: FramedRead<GzipDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-        Brotli {
-            #[pin]
-            inner: FramedRead<BrotliDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(feature = "gzip", not(feature = "deflate"), not(feature = "br")))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Gzip {
-            #[pin]
-            inner: FramedRead<GzipDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(not(feature = "gzip"), feature = "deflate", feature = "br"))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Deflate {
-            #[pin]
-            inner: FramedRead<ZlibDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-        Brotli {
-            #[pin]
-            inner: FramedRead<BrotliDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(not(feature = "gzip"), feature = "deflate", not(feature = "br")))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Deflate {
-            #[pin]
-            inner: FramedRead<ZlibDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(not(feature = "gzip"), not(feature = "deflate"), feature = "br"))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
-        },
-        Brotli {
-            #[pin]
-            inner: FramedRead<BrotliDecoder<StreamReader<BodyAsStream<B>, Bytes>>, BytesCodec>,
-        },
-    }
-}
-
-#[cfg(all(not(feature = "gzip"), not(feature = "deflate"), not(feature = "br")))]
-pin_project! {
-    #[project = BodyInnerProj]
-    #[derive(Debug)]
-    enum BodyInner<B> {
-        Identity {
-            #[pin]
-            inner: B,
         },
     }
 }

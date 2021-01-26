@@ -1,3 +1,5 @@
+//! Middleware that decompresses response bodies.
+
 #![cfg_attr(
     not(any(feature = "br", feature = "gzip", feature = "deflate")),
     allow(unreachable_code, unused)
@@ -25,18 +27,27 @@ use tokio_util::io::StreamReader;
 
 use crate::Error;
 
+/// Decompresses response bodies of the underlying service.
+///
+/// This adds the `Accept-Encoding` header to requests and transparently decompresses response
+/// bodies based on the `Content-Encoding` header.
 #[derive(Debug, Clone)]
 pub struct Decode<S> {
     inner: S,
     options: Options,
 }
 
+/// Decompresses response bodies of the underlying service.
+///
+/// This adds the `Accept-Encoding` header to requests and transparently decompresses response
+/// bodies based on the `Content-Encoding` header.
 #[derive(Debug, Default, Clone)]
 pub struct DecodeLayer {
     options: Options,
 }
 
 pin_project! {
+    /// Response future of [`Decode`].
     #[derive(Debug)]
     pub struct ResponseFuture<F> {
         #[pin]
@@ -46,6 +57,7 @@ pin_project! {
 }
 
 pin_project! {
+    /// Response body of [`Decode`].
     #[derive(Debug)]
     pub struct DecodeBody<B: http_body::Body> {
         #[pin]
@@ -179,6 +191,7 @@ bitflags! {
 }
 
 impl<S> Decode<S> {
+    /// Creates a new `Decode` wrapping the `service`.
     pub fn new(service: S) -> Self {
         Decode {
             inner: service,
@@ -186,46 +199,64 @@ impl<S> Decode<S> {
         }
     }
 
+    /// Gets a reference to the underlying service.
     pub fn get_ref(&self) -> &S {
         &self.inner
     }
 
+    /// Gets a mutable reference to the underlying service.
     pub fn get_mut(&mut self) -> &mut S {
         &mut self.inner
     }
 
+    /// Consumes `self`, returning the underlying service.
     pub fn into_inner(self) -> S {
         self.inner
     }
 
+    /// Sets whether to request the gzip encoding.
     #[cfg(feature = "gzip")]
+    #[cfg_attr(docs, doc(cfg(feature = "gzip")))]
     pub fn gzip(self, enable: bool) -> Self {
         self.options.set_gzip(enable);
         self
     }
 
+    /// Sets whether to request the Deflate encoding.
     #[cfg(feature = "deflate")]
+    #[cfg_attr(docs, doc(cfg(feature = "deflate")))]
     pub fn deflate(self, enable: bool) -> Self {
         self.options.set_deflate(enable);
         self
     }
 
+    /// Sets whether to request the Brotli encoding.
     #[cfg(feature = "br")]
+    #[cfg_attr(docs, doc(cfg(feature = "br")))]
     pub fn br(self, enable: bool) -> Self {
         self.options.set_br(enable);
         self
     }
 
+    /// Disables the gzip encoding.
+    ///
+    /// This method is available even if the `gzip` crate feature is disabled.
     pub fn no_gzip(self) -> Self {
         self.options.set_gzip(false);
         self
     }
 
+    /// Disables the Deflate encoding.
+    ///
+    /// This method is available even if the `deflate` crate feature is disabled.
     pub fn no_deflate(self) -> Self {
         self.options.set_deflate(false);
         self
     }
 
+    /// Disables the Brotli encoding.
+    ///
+    /// This method is available even if the `br` crate feature is disabled.
     pub fn no_br(self) -> Self {
         self.options.set_br(false);
         self
@@ -261,38 +292,54 @@ where
 }
 
 impl DecodeLayer {
+    /// Creates a new `DecodeLayer`.
     pub fn new() -> Self {
         Default::default()
     }
 
+    /// Sets whether to request the gzip encoding.
     #[cfg(feature = "gzip")]
+    #[cfg_attr(docs, doc(cfg(feature = "gzip")))]
     pub fn gzip(self, enable: bool) -> Self {
         self.options.set_gzip(enable);
         self
     }
 
+    /// Sets whether to request the Deflate encoding.
     #[cfg(feature = "deflate")]
+    #[cfg_attr(docs, doc(cfg(feature = "deflate")))]
     pub fn deflate(self, enable: bool) -> Self {
         self.options.set_deflate(enable);
         self
     }
 
+    /// Sets whether to request the Brotli encoding.
     #[cfg(feature = "br")]
+    #[cfg_attr(docs, doc(cfg(feature = "br")))]
     pub fn br(self, enable: bool) -> Self {
         self.options.set_br(enable);
         self
     }
 
+    /// Disables the gzip encoding.
+    ///
+    /// This method is available even if the `gzip` crate feature is disabled.
     pub fn no_gzip(self) -> Self {
         self.options.set_gzip(false);
         self
     }
 
+    /// Disables the Deflate encoding.
+    ///
+    /// This method is available even if the `deflate` crate feature is disabled.
     pub fn no_deflate(self) -> Self {
         self.options.set_deflate(false);
         self
     }
 
+    /// Disables the Brotli encoding.
+    ///
+    /// This method is available even if the `br` crate feature is disabled.
     pub fn no_br(self) -> Self {
         self.options.set_br(false);
         self
@@ -329,6 +376,7 @@ impl<B> DecodeBody<B>
 where
     B: http_body::Body,
 {
+    /// Gets a reference to the underlying body.
     pub fn get_ref(&self) -> &B {
         match self.inner {
             BodyInner::Identity { ref inner } => inner,
@@ -341,6 +389,9 @@ where
         }
     }
 
+    /// Gets a mutable reference to the underlying body.
+    ///
+    /// It is inadvisable to directly read from the underlying body.
     pub fn get_mut(&mut self) -> &mut B {
         match self.inner {
             BodyInner::Identity { ref mut inner } => inner,
@@ -353,6 +404,9 @@ where
         }
     }
 
+    /// Gets a pinned mutable reference to the underlying body.
+    ///
+    /// It is inadvisable to directly read from the underlying body.
     pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut B> {
         match self.project().inner.project() {
             BodyInnerProj::Identity { inner } => inner,
@@ -386,6 +440,9 @@ where
         }
     }
 
+    /// Comsumes `self`, returning the underlying body.
+    ///
+    /// Note that any leftover data in the internal buffer is lost.
     pub fn into_inner(self) -> B {
         match self.inner {
             BodyInner::Identity { inner } => inner,

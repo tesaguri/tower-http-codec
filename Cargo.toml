@@ -5,6 +5,10 @@ authors = ["Daiki Mizukami <tesaguriguma@gmail.com>"]
 edition = "2018"
 publish = false
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docs"]
+
 [dependencies]
 bitflags = "1"
 bytes = "1"

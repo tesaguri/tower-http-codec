@@ -1,3 +1,8 @@
+//! Collection of Tower middlewares to handle HTTP `Content-Encoding`.
+
+#![cfg_attr(docs, feature(doc_cfg))]
+#![warn(missing_docs)]
+
 pub mod decode;
 
 pub use decode::{Decode, DecodeBody, DecodeLayer};
@@ -6,9 +11,12 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 
+/// Error type for the body types.
 #[derive(Debug)]
 pub enum Error<E> {
+    /// Error from the underlying body.
     Body(E),
+    /// Compression/decompression error.
     Compression(io::Error),
 }
 

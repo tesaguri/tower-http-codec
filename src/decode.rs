@@ -186,6 +186,18 @@ impl<S> DecodeService<S> {
         }
     }
 
+    pub fn get_ref(&self) -> &S {
+        &self.inner
+    }
+
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+
     #[cfg(feature = "gzip")]
     pub fn gzip(mut self, enable: bool) -> Self {
         self.options.set(Options::GZIP, enable);
@@ -287,6 +299,75 @@ impl<B> DecodeBody<B>
 where
     B: http_body::Body,
 {
+    pub fn get_ref(&self) -> &B {
+        match self.inner {
+            BodyInner::Identity { ref inner } => inner,
+            #[cfg(feature = "gzip")]
+            BodyInner::Gzip { ref inner } => &inner.get_ref().get_ref().get_ref().body,
+            #[cfg(feature = "deflate")]
+            BodyInner::Deflate { ref inner } => &inner.get_ref().get_ref().get_ref().body,
+            #[cfg(feature = "br")]
+            BodyInner::Brotli { ref inner } => &inner.get_ref().get_ref().get_ref().body,
+        }
+    }
+
+    pub fn get_mut(&mut self) -> &mut B {
+        match self.inner {
+            BodyInner::Identity { ref mut inner } => inner,
+            #[cfg(feature = "gzip")]
+            BodyInner::Gzip { ref mut inner } => &mut inner.get_mut().get_mut().get_mut().body,
+            #[cfg(feature = "deflate")]
+            BodyInner::Deflate { ref mut inner } => &mut inner.get_mut().get_mut().get_mut().body,
+            #[cfg(feature = "br")]
+            BodyInner::Brotli { ref mut inner } => &mut inner.get_mut().get_mut().get_mut().body,
+        }
+    }
+
+    pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut B> {
+        match self.project().inner.project() {
+            BodyInnerProj::Identity { inner } => inner,
+            #[cfg(feature = "gzip")]
+            BodyInnerProj::Gzip { inner } => {
+                inner
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .project()
+                    .body
+            }
+            #[cfg(feature = "deflate")]
+            BodyInnerProj::Deflate { inner } => {
+                inner
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .project()
+                    .body
+            }
+            #[cfg(feature = "br")]
+            BodyInnerProj::Brotli { inner } => {
+                inner
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .get_pin_mut()
+                    .project()
+                    .body
+            }
+        }
+    }
+
+    pub fn into_inner(self) -> B {
+        match self.inner {
+            BodyInner::Identity { inner } => inner,
+            #[cfg(feature = "gzip")]
+            BodyInner::Gzip { inner } => inner.into_inner().into_inner().into_inner().body,
+            #[cfg(feature = "deflate")]
+            BodyInner::Deflate { inner } => inner.into_inner().into_inner().into_inner().body,
+            #[cfg(feature = "br")]
+            BodyInner::Brotli { inner } => inner.into_inner().into_inner().into_inner().body,
+        }
+    }
+
     fn wrap_response(res: http::Response<B>, options: &Options) -> http::Response<Self> {
         let (mut parts, body) = res.into_parts();
         let inner = if let header::Entry::Occupied(e) = parts.headers.entry(CONTENT_ENCODING) {

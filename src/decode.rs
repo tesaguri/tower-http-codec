@@ -26,7 +26,7 @@ use tokio_util::io::StreamReader;
 use crate::Error;
 
 #[derive(Debug, Clone)]
-pub struct DecodeService<S> {
+pub struct Decode<S> {
     inner: S,
     options: Options,
 }
@@ -178,9 +178,9 @@ bitflags! {
     }
 }
 
-impl<S> DecodeService<S> {
+impl<S> Decode<S> {
     pub fn new(service: S) -> Self {
-        DecodeService {
+        Decode {
             inner: service,
             options: Options::default(),
         }
@@ -217,7 +217,7 @@ impl<S> DecodeService<S> {
     }
 }
 
-impl<S, T, B> tower_service::Service<http::Request<T>> for DecodeService<S>
+impl<S, T, B> tower_service::Service<http::Request<T>> for Decode<S>
 where
     S: tower_service::Service<http::Request<T>, Response = http::Response<B>>,
     B: http_body::Body,
@@ -270,10 +270,10 @@ impl DecodeLayer {
 }
 
 impl<S> tower_layer::Layer<S> for DecodeLayer {
-    type Service = DecodeService<S>;
+    type Service = Decode<S>;
 
     fn layer(&self, service: S) -> Self::Service {
-        DecodeService {
+        Decode {
             inner: service,
             options: self.options,
         }

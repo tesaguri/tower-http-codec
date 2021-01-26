@@ -1,6 +1,6 @@
 pub mod decode;
 
-pub use decode::{DecodeBody, DecodeLayer, DecodeService};
+pub use decode::{Decode, DecodeBody, DecodeLayer};
 
 use std::error;
 use std::fmt::{self, Display, Formatter};

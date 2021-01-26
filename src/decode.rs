@@ -199,20 +199,35 @@ impl<S> Decode<S> {
     }
 
     #[cfg(feature = "gzip")]
-    pub fn gzip(mut self, enable: bool) -> Self {
-        self.options.set(Options::GZIP, enable);
+    pub fn gzip(self, enable: bool) -> Self {
+        self.options.set_gzip(enable);
         self
     }
 
     #[cfg(feature = "deflate")]
-    pub fn deflate(mut self, enable: bool) -> Self {
-        self.options.set(Options::DEFLATE, enable);
+    pub fn deflate(self, enable: bool) -> Self {
+        self.options.set_deflate(enable);
         self
     }
 
     #[cfg(feature = "br")]
-    pub fn br(mut self, enable: bool) -> Self {
-        self.options.set(Options::BR, enable);
+    pub fn br(self, enable: bool) -> Self {
+        self.options.set_br(enable);
+        self
+    }
+
+    pub fn no_gzip(self) -> Self {
+        self.options.set_gzip(false);
+        self
+    }
+
+    pub fn no_deflate(self) -> Self {
+        self.options.set_deflate(false);
+        self
+    }
+
+    pub fn no_br(self) -> Self {
+        self.options.set_br(false);
         self
     }
 }
@@ -251,20 +266,35 @@ impl DecodeLayer {
     }
 
     #[cfg(feature = "gzip")]
-    pub fn gzip(mut self, enable: bool) -> Self {
-        self.options.set(Options::GZIP, enable);
+    pub fn gzip(self, enable: bool) -> Self {
+        self.options.set_gzip(enable);
         self
     }
 
     #[cfg(feature = "deflate")]
-    pub fn deflate(mut self, enable: bool) -> Self {
-        self.options.set(Options::DEFLATE, enable);
+    pub fn deflate(self, enable: bool) -> Self {
+        self.options.set_deflate(enable);
         self
     }
 
     #[cfg(feature = "br")]
-    pub fn br(mut self, enable: bool) -> Self {
-        self.options.set(Options::BR, enable);
+    pub fn br(self, enable: bool) -> Self {
+        self.options.set_br(enable);
+        self
+    }
+
+    pub fn no_gzip(self) -> Self {
+        self.options.set_gzip(false);
+        self
+    }
+
+    pub fn no_deflate(self) -> Self {
+        self.options.set_deflate(false);
+        self
+    }
+
+    pub fn no_br(self) -> Self {
+        self.options.set_br(false);
         self
     }
 }
@@ -579,6 +609,42 @@ impl Options {
         #[cfg(not(feature = "br"))]
         {
             false
+        }
+    }
+
+    pub fn set_gzip(mut self, enable: bool) -> Self {
+        #[cfg(feature = "gzip")]
+        {
+            self.set(Options::GZIP, enable);
+            self
+        }
+        #[cfg(not(feature = "gzip"))]
+        {
+            self
+        }
+    }
+
+    pub fn set_deflate(mut self, enable: bool) -> Self {
+        #[cfg(feature = "deflate")]
+        {
+            self.set(Options::DEFLATE, enable);
+            self
+        }
+        #[cfg(not(feature = "deflate"))]
+        {
+            self
+        }
+    }
+
+    pub fn set_br(mut self, enable: bool) -> Self {
+        #[cfg(feature = "br")]
+        {
+            self.set(Options::BR, enable);
+            self
+        }
+        #[cfg(not(feature = "br"))]
+        {
+            self
         }
     }
 }

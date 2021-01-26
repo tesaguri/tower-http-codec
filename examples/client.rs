@@ -18,7 +18,7 @@ async fn main() {
         .unwrap();
 
     let mut client = ServiceBuilder::new()
-        .layer(tower_http_codec::DecodeLayer::new())
+        .layer(tower_http_compression::DecodeLayer::new())
         .service(Client::new());
 
     let req = Request::get(uri).body(Body::empty()).unwrap();

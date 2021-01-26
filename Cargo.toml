@@ -1,5 +1,5 @@
 [package]
-name = "tower-http-codec"
+name = "tower-http-compression"
 version = "0.0.0"
 authors = ["Daiki Mizukami <tesaguriguma@gmail.com>"]
 edition = "2018"
